@@ -211,3 +211,16 @@ match(type: "appstore", readonly: true)  # if using match
 ### "Git working directory is not clean"
 
 Commit or stash your changes first, or use `--skip-git-check`.
+
+---
+
+## AI-Assisted Setup
+
+Using an AI coding assistant (Claude Code, Cursor, Copilot, etc.)? Copy the contents of [`AGENT_PROMPT.md`](./AGENT_PROMPT.md) into your project's AI instructions file (e.g., `CLAUDE.md`, `.cursorrules`).
+
+The AI will:
+1. Ask for your App Store Connect credentials upfront
+2. Guide you through each setup step
+3. Troubleshoot common issues
+
+This is the fastest way to get started - no docs reading required!
