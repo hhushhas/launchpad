@@ -47,6 +47,14 @@ enum Commands {
         /// Xcode scheme to use
         #[arg(long)]
         scheme: Option<String>,
+
+        /// Bundle identifier
+        #[arg(long)]
+        bundle_id: Option<String>,
+
+        /// Non-interactive mode (accept defaults)
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// Interactive first-time setup (global config)
@@ -69,9 +77,11 @@ async fn main() -> ExitCode {
         } => commands::deploy::run(patch, minor, no_tag, skip_git_check)
             .await
             .map_err(|e| e.into()),
-        Commands::Init { ios_path, scheme } => commands::init::run(ios_path, scheme)
-            .await
-            .map_err(|e| e.into()),
+        Commands::Init { ios_path, scheme, bundle_id, yes } => {
+            commands::init::run(ios_path, scheme, bundle_id, yes)
+                .await
+                .map_err(|e| e.into())
+        }
         Commands::Setup => commands::setup::run().await.map_err(|e| e.into()),
         Commands::Doctor => commands::doctor::run().await.map_err(|e| e.into()),
     };

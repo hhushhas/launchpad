@@ -8,3 +8,5 @@
 - Create `.launchpad.toml.example` for team reference
 - New `src/templates.rs` module for Fastfile and config templates
 - `AGENT_PROMPT.md` - AI agent instructions for guided setup (Claude Code, Cursor, etc.)
+- `--yes` / `-y` flag for non-interactive mode (CI/scripting)
+- `--bundle-id` flag to specify bundle identifier directly

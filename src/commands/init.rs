@@ -31,7 +31,12 @@ pub enum InitError {
     UserCancelled,
 }
 
-pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(), InitError> {
+pub async fn run(
+    ios_path: Option<String>,
+    scheme: Option<String>,
+    bundle_id: Option<String>,
+    non_interactive: bool,
+) -> Result<(), InitError> {
     ui::header("Launchpad Init");
 
     // Check if already initialized
@@ -40,7 +45,7 @@ pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(),
     }
 
     // 1. Check and install fastlane
-    check_and_install_fastlane()?;
+    check_and_install_fastlane(non_interactive)?;
 
     // 2. Detect iOS project path
     let detected_ios_path = ios_path.unwrap_or_else(|| detect_ios_path().unwrap_or_default());
@@ -62,6 +67,10 @@ pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(),
     } else if schemes.len() == 1 {
         ui::success(&format!("Detected scheme: {}", schemes[0]));
         schemes[0].clone()
+    } else if non_interactive {
+        // In non-interactive mode, pick the first scheme
+        ui::success(&format!("Using scheme: {} (first of {})", schemes[0], schemes.len()));
+        schemes[0].clone()
     } else {
         ui::step("Multiple schemes found. Please select one:");
         let selection = Select::new()
@@ -73,30 +82,44 @@ pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(),
     };
 
     // 4. Detect bundle ID
-    let bundle_id = Xcode::get_bundle_id(&detected_ios_path, &selected_scheme)
+    let detected_bundle_id = Xcode::get_bundle_id(&detected_ios_path, &selected_scheme)
         .unwrap_or_else(|_| "com.example.app".to_string());
 
-    let bundle_id: String = Input::new()
-        .with_prompt("Bundle identifier")
-        .default(bundle_id)
-        .interact_text()
-        .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    let final_bundle_id = if let Some(b) = bundle_id {
+        b
+    } else if non_interactive {
+        ui::success(&format!("Using bundle ID: {}", detected_bundle_id));
+        detected_bundle_id
+    } else {
+        Input::new()
+            .with_prompt("Bundle identifier")
+            .default(detected_bundle_id)
+            .interact_text()
+            .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+    };
 
     // 5. Git tag options
-    let git_tag = Confirm::new()
-        .with_prompt("Create git tags after deploy?")
-        .default(true)
-        .interact()
-        .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-
-    let push_tags = if git_tag {
-        Confirm::new()
-            .with_prompt("Push tags to remote?")
+    let (git_tag, push_tags) = if non_interactive {
+        ui::success("Git tagging: enabled (default)");
+        (true, true)
+    } else {
+        let git_tag = Confirm::new()
+            .with_prompt("Create git tags after deploy?")
             .default(true)
             .interact()
-            .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
-    } else {
-        false
+            .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
+        let push_tags = if git_tag {
+            Confirm::new()
+                .with_prompt("Push tags to remote?")
+                .default(true)
+                .interact()
+                .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+        } else {
+            false
+        };
+
+        (git_tag, push_tags)
     };
 
     // 6. Create config
@@ -104,7 +127,7 @@ pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(),
         project: crate::config::project::ProjectSettings {
             ios_path: detected_ios_path.clone(),
             scheme: selected_scheme.clone(),
-            bundle_id,
+            bundle_id: final_bundle_id,
         },
         deploy: crate::config::project::DeploySettings {
             git_tag,
@@ -127,15 +150,19 @@ pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(),
     }
 
     // 9. Check and create Fastfile
-    check_and_create_fastfile(&detected_ios_path, &selected_scheme)?;
+    check_and_create_fastfile(&detected_ios_path, &selected_scheme, non_interactive)?;
 
     // 10. Offer to add to .gitignore
     if Path::new(".gitignore").exists() {
-        let add_gitignore = Confirm::new()
-            .with_prompt("Add .launchpad.toml to .gitignore?")
-            .default(false)
-            .interact()
-            .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        let add_gitignore = if non_interactive {
+            false // Don't modify gitignore in non-interactive mode
+        } else {
+            Confirm::new()
+                .with_prompt("Add .launchpad.toml to .gitignore?")
+                .default(false)
+                .interact()
+                .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+        };
 
         if add_gitignore {
             let mut gitignore = std::fs::read_to_string(".gitignore")?;
@@ -158,7 +185,7 @@ pub async fn run(ios_path: Option<String>, scheme: Option<String>) -> Result<(),
     Ok(())
 }
 
-fn check_and_install_fastlane() -> Result<(), InitError> {
+fn check_and_install_fastlane(non_interactive: bool) -> Result<(), InitError> {
     if which::which("fastlane").is_ok() {
         ui::success("fastlane found");
         return Ok(());
@@ -166,11 +193,16 @@ fn check_and_install_fastlane() -> Result<(), InitError> {
 
     ui::error("fastlane not found");
 
-    let install = Confirm::new()
-        .with_prompt("Install fastlane?")
-        .default(true)
-        .interact()
-        .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    let install = if non_interactive {
+        ui::step("Installing fastlane (--yes mode)...");
+        true
+    } else {
+        Confirm::new()
+            .with_prompt("Install fastlane?")
+            .default(true)
+            .interact()
+            .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+    };
 
     if !install {
         return Err(InitError::UserCancelled);
@@ -198,7 +230,7 @@ fn check_and_install_fastlane() -> Result<(), InitError> {
     Ok(())
 }
 
-fn check_and_create_fastfile(ios_path: &str, scheme: &str) -> Result<(), InitError> {
+fn check_and_create_fastfile(ios_path: &str, scheme: &str, non_interactive: bool) -> Result<(), InitError> {
     let fastfile_paths = [
         format!("{}/fastlane/Fastfile", ios_path),
         format!("{}/Fastfile", ios_path),
@@ -213,13 +245,18 @@ fn check_and_create_fastfile(ios_path: &str, scheme: &str) -> Result<(), InitErr
         }
     }
 
-    ui::error(&format!("Fastfile not found in {}/fastlane/", ios_path));
+    ui::warn(&format!("Fastfile not found in {}/fastlane/", ios_path));
 
-    let create = Confirm::new()
-        .with_prompt("Create Fastfile with required lanes?")
-        .default(true)
-        .interact()
-        .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    let create = if non_interactive {
+        ui::step("Creating Fastfile (--yes mode)...");
+        true
+    } else {
+        Confirm::new()
+            .with_prompt("Create Fastfile with required lanes?")
+            .default(true)
+            .interact()
+            .map_err(|e| InitError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?
+    };
 
     if !create {
         ui::warn("Skipping Fastfile creation. You'll need to create it manually.");
@@ -246,7 +283,7 @@ fn detect_ios_path() -> Option<String> {
     for candidate in candidates {
         let path = Path::new(candidate);
 
-        // Check for .xcworkspace
+        // Check for .xcworkspace or .xcodeproj
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
